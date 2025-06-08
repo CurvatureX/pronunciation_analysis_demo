@@ -19,7 +19,7 @@ variable "environment" {
 variable "instance_type" {
   description = "EC2 instance type"
   type        = string
-  default     = "t2.nano"
+  default     = "t2.micro"
 }
 
 variable "public_key" {
