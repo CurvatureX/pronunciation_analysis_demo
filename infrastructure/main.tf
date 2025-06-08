@@ -123,6 +123,12 @@ resource "aws_instance" "web" {
     project_name = var.project_name
   }))
 
+  root_block_device {
+    volume_type = "gp3"
+    volume_size = 12  # Increased from default 8GB to 12GB
+    encrypted   = false
+  }
+
   tags = {
     Name        = "${var.project_name}-web-server"
     Environment = var.environment

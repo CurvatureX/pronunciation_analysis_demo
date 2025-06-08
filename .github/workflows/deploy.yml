@@ -138,7 +138,7 @@ jobs:
           cp -r public deployment/
           cp package*.json deployment/
           cp next.config.js deployment/
-          cp -r node_modules deployment/
+          # Don't include node_modules - we'll install them on the server
 
       - name: Deploy to EC2
         uses: appleboy/scp-action@v0.1.4
@@ -173,7 +173,15 @@ jobs:
               mkdir -p /home/ec2-user/app
             fi
 
+            # Clean up npm cache to free space
+            echo "🧹 Cleaning npm cache..."
+            npm cache clean --force 2>/dev/null || true
+
             echo "✅ Cleanup completed, application directory is clean"
+
+            # Show disk usage after cleanup
+            echo "💾 Disk usage after cleanup:"
+            df -h /
             echo ""
             echo "🚀 Setting up application environment..."
 
@@ -216,8 +224,12 @@ jobs:
             # Install dependencies if package.json exists
             if [ -f "package.json" ]; then
               echo "📦 Installing dependencies..."
-              npm ci --production
+              npm ci --production --no-optional
               echo "✅ Dependencies installed"
+              
+              # Show disk usage after installation
+              echo "💾 Disk usage after dependency installation:"
+              df -h /
             fi
 
             # Start the application with PM2

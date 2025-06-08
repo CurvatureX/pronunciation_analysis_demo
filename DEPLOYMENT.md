@@ -163,11 +163,11 @@ Or run the destroy workflow if you create one.
 Estimated monthly costs (us-west-1):
 
 - EC2 t2.nano instance: ~$4.20/month
-- Root storage (default AMI): Included
+- Root storage (12GB gp3): ~$1.20/month
 - Elastic IP (when associated): Free
 - Data transfer: Variable based on usage
 
-**Total estimated cost**: ~$4.20/month
+**Total estimated cost**: ~$5.40/month
 
 ## Support
 
