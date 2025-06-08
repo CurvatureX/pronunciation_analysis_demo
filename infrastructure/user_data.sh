@@ -3,8 +3,8 @@
 # Update system
 yum update -y
 
-# Install Node.js 18
-curl -fsSL https://rpm.nodesource.com/setup_18.x | bash -
+# Install Node.js 16 (compatible with Amazon Linux 2)
+curl -fsSL https://rpm.nodesource.com/setup_16.x | bash -
 yum install -y nodejs
 
 # Install PM2 globally

@@ -15,7 +15,7 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: "18"
+          node-version: "16"
           cache: "npm"
 
       - name: Install dependencies
@@ -58,56 +58,71 @@ jobs:
         run: terraform init
         working-directory: ./infrastructure
 
-      - name: Clean up existing resources
+      - name: Check existing infrastructure
+        id: check-infra
         run: |
-          # List and delete any existing key pairs with the project name
-          aws ec2 describe-key-pairs --query "KeyPairs[?starts_with(KeyName, 'pronunciation-analysis-deployer-key')].KeyName" --output text | \
-          xargs -r -I {} aws ec2 delete-key-pair --key-name {}
+          # Check if EC2 instance exists
+          INSTANCE_ID=$(aws ec2 describe-instances \
+            --filters "Name=tag:Name,Values=pronunciation-analysis-web-server" "Name=instance-state-name,Values=running,pending,stopping,stopped" \
+            --query "Reservations[0].Instances[0].InstanceId" --output text)
 
-          # List and terminate any existing instances with the project name
-          aws ec2 describe-instances \
-            --filters "Name=tag:Name,Values=pronunciation-analysis-web-server-*" "Name=instance-state-name,Values=running,pending,stopping,stopped" \
-            --query "Reservations[].Instances[].InstanceId" --output text | \
-          xargs -r -I {} aws ec2 terminate-instances --instance-ids {}
-
-          # Wait a bit for instances to start terminating
-          sleep 10
-
-          # Release any existing Elastic IPs with the project name
-          aws ec2 describe-addresses \
-            --filters "Name=tag:Name,Values=pronunciation-analysis-eip-*" \
-            --query "Addresses[?AssociationId==null].AllocationId" --output text | \
-          xargs -r -I {} aws ec2 release-address --allocation-id {}
-
-          # Delete any existing security groups with the project name
-          aws ec2 describe-security-groups \
-            --filters "Name=group-name,Values=pronunciation-analysis-web-sg-*" \
-            --query "SecurityGroups[].GroupId" --output text | \
-          xargs -r -I {} aws ec2 delete-security-group --group-id {}
-        continue-on-error: true
+          if [ "$INSTANCE_ID" != "None" ] && [ "$INSTANCE_ID" != "" ]; then
+            echo "existing_instance=true" >> $GITHUB_OUTPUT
+            echo "instance_id=$INSTANCE_ID" >> $GITHUB_OUTPUT
+            echo "✅ Found existing EC2 instance: $INSTANCE_ID"
+            
+            # Get the public IP
+            PUBLIC_IP=$(aws ec2 describe-instances \
+              --instance-ids $INSTANCE_ID \
+              --query "Reservations[0].Instances[0].PublicIpAddress" --output text)
+            echo "public_ip=$PUBLIC_IP" >> $GITHUB_OUTPUT
+            echo "🌐 Existing public IP: $PUBLIC_IP"
+          else
+            echo "existing_instance=false" >> $GITHUB_OUTPUT
+            echo "⚠️ No existing instance found, will create new infrastructure"
+            
+            # Clean up any orphaned resources only if no instance exists
+            aws ec2 describe-key-pairs --query "KeyPairs[?starts_with(KeyName, 'pronunciation-analysis-deployer-key')].KeyName" --output text | \
+            xargs -r -I {} aws ec2 delete-key-pair --key-name {} || true
+            
+            aws ec2 describe-security-groups \
+              --filters "Name=group-name,Values=pronunciation-analysis-web-sg-*" \
+              --query "SecurityGroups[].GroupId" --output text | \
+            xargs -r -I {} aws ec2 delete-security-group --group-id {} || true
+          fi
 
       - name: Terraform Plan
+        if: steps.check-infra.outputs.existing_instance == 'false'
         run: terraform plan -out=tfplan -var="public_key=${{ env.PUBLIC_KEY }}"
         working-directory: ./infrastructure
 
       - name: Terraform Apply
+        if: steps.check-infra.outputs.existing_instance == 'false'
         run: terraform apply -auto-approve tfplan
         working-directory: ./infrastructure
 
       - name: Get EC2 public IP
         id: get-ip
         run: |
-          echo "ec2_ip=$(terraform output -raw ec2_public_ip)" >> $GITHUB_OUTPUT
-          echo "🌐 Static IP Address: $(terraform output -raw ec2_public_ip)"
-          echo "🔗 Application URL: http://$(terraform output -raw ec2_public_ip):3000"
-          echo "🔗 Application URL (via Nginx): http://$(terraform output -raw ec2_public_ip)"
-          echo "🚀 API Endpoint: http://$(terraform output -raw ec2_public_ip):3000/api/pronunciation-assessment"
+          if [ "${{ steps.check-infra.outputs.existing_instance }}" == "true" ]; then
+            echo "ec2_ip=${{ steps.check-infra.outputs.public_ip }}" >> $GITHUB_OUTPUT
+            echo "🌐 Using existing Static IP Address: ${{ steps.check-infra.outputs.public_ip }}"
+            echo "🔗 Application URL: http://${{ steps.check-infra.outputs.public_ip }}:3000"
+            echo "🔗 Application URL (via Nginx): http://${{ steps.check-infra.outputs.public_ip }}"
+            echo "🚀 API Endpoint: http://${{ steps.check-infra.outputs.public_ip }}:3000/api/pronunciation-assessment"
+          else
+            echo "ec2_ip=$(terraform output -raw ec2_public_ip)" >> $GITHUB_OUTPUT
+            echo "🌐 New Static IP Address: $(terraform output -raw ec2_public_ip)"
+            echo "🔗 Application URL: http://$(terraform output -raw ec2_public_ip):3000"
+            echo "🔗 Application URL (via Nginx): http://$(terraform output -raw ec2_public_ip)"
+            echo "🚀 API Endpoint: http://$(terraform output -raw ec2_public_ip):3000/api/pronunciation-assessment"
+          fi
         working-directory: ./infrastructure
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: "18"
+          node-version: "16"
           cache: "npm"
 
       - name: Install dependencies
@@ -136,7 +151,57 @@ jobs:
           target: "/home/ec2-user/app"
           strip_components: 1
 
-      - name: Start application on EC2
+      - name: Clean up and start application on EC2
+        uses: appleboy/ssh-action@v1.0.0
+        with:
+          host: ${{ steps.get-ip.outputs.ec2_ip }}
+          username: ec2-user
+          key: ${{ env.PRIVATE_KEY }}
+          port: 22
+          script: |
+            echo "🧹 Cleaning up existing application..."
+
+            # Stop the running application
+            pm2 delete pronunciation-analysis-demo || true
+
+            # Clean up old application files
+            if [ -d "/home/ec2-user/app" ]; then
+              echo "📂 Removing old application files..."
+              rm -rf /home/ec2-user/app/*
+              rm -rf /home/ec2-user/app/.*
+            else
+              mkdir -p /home/ec2-user/app
+            fi
+
+            echo "✅ Cleanup completed, application directory is clean"
+            echo ""
+            echo "🚀 Setting up application environment..."
+
+            cd /home/ec2-user/app
+
+            # Install Node.js if not present
+            if ! command -v node &> /dev/null; then
+              echo "📦 Installing Node.js 16..."
+              curl -fsSL https://rpm.nodesource.com/setup_16.x | sudo bash -
+              sudo yum install -y nodejs
+              echo "✅ Node.js installed: $(node --version)"
+            else
+              echo "✅ Node.js already installed: $(node --version)"
+            fi
+
+            # Install PM2 if not present
+            if ! command -v pm2 &> /dev/null; then
+              echo "📦 Installing PM2..."
+              sudo npm install -g pm2
+              echo "✅ PM2 installed: $(pm2 --version)"
+            else
+              echo "✅ PM2 already installed: $(pm2 --version)"
+            fi
+
+            echo ""
+            echo "⏳ Waiting for new application files to be deployed..."
+
+      - name: Start application
         uses: appleboy/ssh-action@v1.0.0
         with:
           host: ${{ steps.get-ip.outputs.ec2_ip }}
@@ -145,24 +210,38 @@ jobs:
           port: 22
           script: |
             cd /home/ec2-user/app
-            # Install Node.js if not present
-            if ! command -v node &> /dev/null; then
-              curl -fsSL https://rpm.nodesource.com/setup_18.x | sudo bash -
-              sudo yum install -y nodejs
+
+            echo "🚀 Starting application..."
+
+            # Install dependencies if package.json exists
+            if [ -f "package.json" ]; then
+              echo "📦 Installing dependencies..."
+              npm ci --production
+              echo "✅ Dependencies installed"
             fi
-            # Install PM2 if not present
-            if ! command -v pm2 &> /dev/null; then
-              sudo npm install -g pm2
-            fi
-            # Start or restart the application
-            pm2 delete pronunciation-analysis-demo || true
+
+            # Start the application with PM2
+            echo "🔄 Starting application with PM2..."
             pm2 start npm --name "pronunciation-analysis-demo" -- start
             pm2 save
             pm2 startup
 
+            echo "✅ Application started successfully!"
+            echo ""
+            echo "📊 Application Status:"
+            pm2 list
+            echo ""
+            echo "🔗 Application should be available at the URLs shown below"
+
       - name: Display Deployment Information
         run: |
-          echo "🎉 Deployment completed successfully!"
+          if [ "${{ steps.check-infra.outputs.existing_instance }}" == "true" ]; then
+            echo "🔄 Application update completed successfully!"
+            echo "♻️ Reused existing EC2 instance: ${{ steps.check-infra.outputs.instance_id }}"
+          else
+            echo "🎉 New deployment completed successfully!"
+            echo "🆕 Created new infrastructure"
+          fi
           echo ""
           echo "📍 DEPLOYMENT INFORMATION:"
           echo "========================="
