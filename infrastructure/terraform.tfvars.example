@@ -1,0 +1,19 @@
+# Copy this file to terraform.tfvars and update the values
+
+# AWS Configuration
+aws_region = "us-west-1"
+
+# Project Configuration
+project_name = "pronunciation-analysis"
+environment  = "production"
+
+# EC2 Configuration  
+instance_type = "t2.nano"
+
+# SSH Key - Add your public key here
+# Generate with: ssh-keygen -t rsa -b 4096 -C "your_email@example.com"
+# Then copy the content of ~/.ssh/id_rsa.pub
+public_key = "ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABgQC... your-public-key-here"
+
+# Security
+allowed_cidr_blocks = ["0.0.0.0/0"]  # Change this to your IP range for better security 

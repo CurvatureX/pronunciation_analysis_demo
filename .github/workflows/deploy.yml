@@ -1,0 +1,141 @@
+name: Deploy to EC2
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "18"
+          cache: "npm"
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run linter
+        run: npm run lint
+
+      - name: Build application
+        run: npm run build
+
+  deploy:
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.5.0
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: us-west-1
+
+      - name: Terraform Init
+        run: terraform init
+        working-directory: ./infrastructure
+
+      - name: Terraform Plan
+        run: terraform plan -out=tfplan
+        working-directory: ./infrastructure
+
+      - name: Terraform Apply
+        run: terraform apply -auto-approve tfplan
+        working-directory: ./infrastructure
+
+      - name: Get EC2 public IP
+        id: get-ip
+        run: |
+          echo "ec2_ip=$(terraform output -raw ec2_public_ip)" >> $GITHUB_OUTPUT
+          echo "🌐 Static IP Address: $(terraform output -raw ec2_public_ip)"
+          echo "🔗 Application URL: http://$(terraform output -raw ec2_public_ip):3000"
+          echo "🔗 Application URL (via Nginx): http://$(terraform output -raw ec2_public_ip)"
+          echo "🚀 API Endpoint: http://$(terraform output -raw ec2_public_ip):3000/api/pronunciation-assessment"
+        working-directory: ./infrastructure
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "18"
+          cache: "npm"
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build application
+        run: npm run build
+
+      - name: Create deployment package
+        run: |
+          mkdir -p deployment
+          cp -r .next deployment/
+          cp -r public deployment/
+          cp package*.json deployment/
+          cp next.config.js deployment/
+          cp -r node_modules deployment/
+
+      - name: Deploy to EC2
+        uses: appleboy/scp-action@v0.1.4
+        with:
+          host: ${{ steps.get-ip.outputs.ec2_ip }}
+          username: ec2-user
+          key: ${{ secrets.EC2_SSH_PRIVATE_KEY }}
+          port: 22
+          source: "deployment/*"
+          target: "/home/ec2-user/app"
+          strip_components: 1
+
+      - name: Start application on EC2
+        uses: appleboy/ssh-action@v1.0.0
+        with:
+          host: ${{ steps.get-ip.outputs.ec2_ip }}
+          username: ec2-user
+          key: ${{ secrets.EC2_SSH_PRIVATE_KEY }}
+          port: 22
+          script: |
+            cd /home/ec2-user/app
+            # Install Node.js if not present
+            if ! command -v node &> /dev/null; then
+              curl -fsSL https://rpm.nodesource.com/setup_18.x | sudo bash -
+              sudo yum install -y nodejs
+            fi
+            # Install PM2 if not present
+            if ! command -v pm2 &> /dev/null; then
+              sudo npm install -g pm2
+            fi
+            # Start or restart the application
+            pm2 delete pronunciation-analysis-demo || true
+            pm2 start npm --name "pronunciation-analysis-demo" -- start
+            pm2 save
+            pm2 startup
+
+      - name: Display Deployment Information
+        run: |
+          echo "🎉 Deployment completed successfully!"
+          echo ""
+          echo "📍 DEPLOYMENT INFORMATION:"
+          echo "========================="
+          echo "🌐 Static IP Address: ${{ steps.get-ip.outputs.ec2_ip }}"
+          echo "🔗 Application URL (Direct): http://${{ steps.get-ip.outputs.ec2_ip }}:3000"
+          echo "🔗 Application URL (Nginx): http://${{ steps.get-ip.outputs.ec2_ip }}"
+          echo "🚀 API Endpoint: http://${{ steps.get-ip.outputs.ec2_ip }}:3000/api/pronunciation-assessment"
+          echo ""
+          echo "📝 Additional Information:"
+          echo "- SSH Access: ssh -i your-key.pem ec2-user@${{ steps.get-ip.outputs.ec2_ip }}"
+          echo "- PM2 Status: ssh -i your-key.pem ec2-user@${{ steps.get-ip.outputs.ec2_ip }} 'pm2 list'"
+          echo "- Application Logs: ssh -i your-key.pem ec2-user@${{ steps.get-ip.outputs.ec2_ip }} 'pm2 logs pronunciation-analysis-demo'"
