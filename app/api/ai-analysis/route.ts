@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import OpenAI from 'openai';
 
-const DEEPSEEK_API_KEY = process.env.DEEPSEEK_API_KEY;
+const DEEPSEEK_API_KEY = "sk-85c12c5754984b26807190448a5f9d8a" // process.env.DEEPSEEK_API_KEY;
 const DEEPSEEK_API_URL = process.env.DEEPSEEK_API_URL || 'https://api.deepseek.com';
 
 const SYSTEM_PROMPT = `你是一位热情洋溢、经验丰富的英语口语老师，深受学生喜爱！你的任务是根据提供的语音分析API响应数据，为学生制定一个生动、简洁、针对性的英语口语提升计划。

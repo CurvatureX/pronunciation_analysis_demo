@@ -287,8 +287,9 @@ export default function PronunciationAnalysis() {
 
     try {
       // Azure Speech Service configuration from environment variables
-      const speechKey = process.env.NEXT_PUBLIC_AZURE_SPEECH_KEY;
-      const speechRegion = process.env.NEXT_PUBLIC_AZURE_SPEECH_REGION;
+      const speechKey =
+        "8WzvsXMuvoyP56mWnjhVrJX0YgMaZvHUKdPKz0gIiDrQcb1sRYu2JQQJ99BFACi0881XJ3w3AAAYACOGhyVT"; //process.env.NEXT_PUBLIC_AZURE_SPEECH_KEY;
+      const speechRegion = "japaneast"; // process.env.NEXT_PUBLIC_AZURE_SPEECH_REGION;
 
       if (!speechKey || !speechRegion) {
         throw new Error(
