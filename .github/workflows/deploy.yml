@@ -1,9 +1,21 @@
-name: Deploy to EC2
+name: Deploy to GitHub Pages
 
 on:
   push:
     branches: [main]
   workflow_dispatch:
+
+# Sets permissions of the GITHUB_TOKEN to allow deployment to GitHub Pages
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# Allow only one concurrent deployment, skipping runs queued between the run in-progress and latest queued.
+# However, do NOT cancel in-progress runs as we want to allow these production deployments to complete.
+concurrency:
+  group: "pages"
+  cancel-in-progress: false
 
 jobs:
   test:
@@ -24,138 +36,12 @@ jobs:
       - name: Run linter
         run: npm run lint
 
-  deploy:
-    needs: test
+  build:
     runs-on: ubuntu-latest
+    needs: test
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
-
-      - name: Setup Terraform
-        uses: hashicorp/setup-terraform@v3
-        with:
-          terraform_version: 1.5.0
-
-      - name: Configure AWS credentials
-        uses: aws-actions/configure-aws-credentials@v4
-        with:
-          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY }}
-          aws-secret-access-key: ${{ secrets.AWS_SECRET_KEY }}
-          aws-region: us-west-1
-
-      - name: Generate SSH key pair
-        run: |
-          echo "🔑 Generating SSH key pair..."
-          ssh-keygen -t rsa -b 4096 -f ~/.ssh/pronunciation-analysis-key -N ""
-
-          echo "📝 SSH key pair generated successfully"
-          echo "Public key fingerprint: $(ssh-keygen -lf ~/.ssh/pronunciation-analysis-key.pub)"
-
-          echo "PUBLIC_KEY=$(cat ~/.ssh/pronunciation-analysis-key.pub)" >> $GITHUB_ENV
-          echo "PRIVATE_KEY<<EOF" >> $GITHUB_ENV
-          cat ~/.ssh/pronunciation-analysis-key >> $GITHUB_ENV
-          echo "EOF" >> $GITHUB_ENV
-
-          echo "✅ SSH environment variables set"
-
-      - name: Terraform Init
-        run: terraform init
-        working-directory: ./infrastructure
-
-      - name: Check existing infrastructure
-        id: check-infra
-        run: |
-          # Check if EC2 instance exists
-          INSTANCE_ID=$(aws ec2 describe-instances \
-            --filters "Name=tag:Name,Values=pronunciation-analysis-web-server" "Name=instance-state-name,Values=running,pending,stopping,stopped" \
-            --query "Reservations[0].Instances[0].InstanceId" --output text)
-
-          if [ "$INSTANCE_ID" != "None" ] && [ "$INSTANCE_ID" != "" ]; then
-            echo "✅ Found existing EC2 instance: $INSTANCE_ID"
-            
-            # Get the key name used by the instance
-            KEY_NAME=$(aws ec2 describe-instances \
-              --instance-ids $INSTANCE_ID \
-              --query "Reservations[0].Instances[0].KeyName" --output text)
-            echo "🔑 Instance using key: $KEY_NAME"
-            
-            # Check if the instance is using the correct key name
-            EXPECTED_KEY_NAME="pronunciation-analysis-deployer-key"
-            if [ "$KEY_NAME" = "$EXPECTED_KEY_NAME" ]; then
-              echo "✅ Instance is using correct key name"
-              echo "existing_instance=true" >> $GITHUB_OUTPUT
-              echo "instance_id=$INSTANCE_ID" >> $GITHUB_OUTPUT
-              
-              # Get the public IP
-              PUBLIC_IP=$(aws ec2 describe-instances \
-                --instance-ids $INSTANCE_ID \
-                --query "Reservations[0].Instances[0].PublicIpAddress" --output text)
-              echo "public_ip=$PUBLIC_IP" >> $GITHUB_OUTPUT
-              echo "🌐 Existing public IP: $PUBLIC_IP"
-            else
-              echo "⚠️ Instance is using wrong key: $KEY_NAME (expected: $EXPECTED_KEY_NAME)"
-              echo "🔄 Will terminate existing instance and create new one with correct key"
-              
-              # Terminate the existing instance
-              echo "🗑️ Terminating instance with wrong key..."
-              aws ec2 terminate-instances --instance-ids $INSTANCE_ID
-              
-              # Wait for termination
-              echo "⏳ Waiting for instance termination..."
-              aws ec2 wait instance-terminated --instance-ids $INSTANCE_ID
-              echo "✅ Instance terminated"
-              
-              echo "existing_instance=false" >> $GITHUB_OUTPUT
-            fi
-          else
-            echo "existing_instance=false" >> $GITHUB_OUTPUT
-            echo "⚠️ No existing instance found, will create new infrastructure"
-          fi
-
-          # Clean up orphaned resources if we're creating new infrastructure
-          if [ "$(cat $GITHUB_OUTPUT | grep 'existing_instance=false' || echo '')" != "" ]; then
-            echo "🧹 Cleaning up orphaned resources..."
-            
-            # Clean up key pairs
-            aws ec2 describe-key-pairs --query "KeyPairs[?starts_with(KeyName, 'pronunciation-analysis-deployer-key')].KeyName" --output text | \
-            xargs -r -I {} aws ec2 delete-key-pair --key-name {} || true
-            
-            # Clean up security groups
-            aws ec2 describe-security-groups \
-              --filters "Name=group-name,Values=pronunciation-analysis-web-sg*" \
-              --query "SecurityGroups[].GroupId" --output text | \
-            xargs -r -I {} aws ec2 delete-security-group --group-id {} || true
-            
-            echo "✅ Cleanup completed"
-          fi
-
-      - name: Terraform Plan
-        if: steps.check-infra.outputs.existing_instance == 'false'
-        run: terraform plan -out=tfplan -var="public_key=${{ env.PUBLIC_KEY }}"
-        working-directory: ./infrastructure
-
-      - name: Terraform Apply
-        if: steps.check-infra.outputs.existing_instance == 'false'
-        run: terraform apply -auto-approve tfplan
-        working-directory: ./infrastructure
-
-      - name: Get EC2 public IP
-        id: get-ip
-        run: |
-          if [ "${{ steps.check-infra.outputs.existing_instance }}" == "true" ]; then
-            echo "ec2_ip=${{ steps.check-infra.outputs.public_ip }}" >> $GITHUB_OUTPUT
-            echo "🌐 Using existing Static IP Address: ${{ steps.check-infra.outputs.public_ip }}"
-            echo "🔗 Application URL: http://${{ steps.check-infra.outputs.public_ip }}:3000"
-            echo "🔗 Application URL (via Nginx): http://${{ steps.check-infra.outputs.public_ip }}"
-            echo "🚀 API Endpoint: http://${{ steps.check-infra.outputs.public_ip }}:3000/api/pronunciation-assessment"
-          else
-            echo "ec2_ip=$(terraform output -raw ec2_public_ip)" >> $GITHUB_OUTPUT
-            echo "🌐 New Static IP Address: $(terraform output -raw ec2_public_ip)"
-            echo "🔗 Application URL: http://$(terraform output -raw ec2_public_ip):3000"
-            echo "🔗 Application URL (via Nginx): http://$(terraform output -raw ec2_public_ip)"
-            echo "🚀 API Endpoint: http://$(terraform output -raw ec2_public_ip):3000/api/pronunciation-assessment"
-          fi
-        working-directory: ./infrastructure
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
@@ -163,232 +49,45 @@ jobs:
           node-version: "18"
           cache: "npm"
 
+      - name: Setup Pages
+        uses: actions/configure-pages@v4
+        with:
+          # Automatically inject basePath in your Next.js configuration file and disable
+          # server side image optimization (so your project can be exported statically).
+          static_site_generator: next
+
       - name: Install dependencies
         run: npm ci
 
-      - name: Create source code package
-        run: |
-          mkdir -p deployment
-          # Copy source files only (no build artifacts)
-          cp -r app/ deployment/
-          cp -r public/ deployment/
-          cp package*.json deployment/
-          cp next.config.js deployment/
-          cp tsconfig.json deployment/
-          cp tailwind.config.js deployment/
-          cp postcss.config.js deployment/
-          cp .eslintrc.json deployment/
-          # Copy environment example for reference
-          cp env.example deployment/
-          echo "📦 Source code package created (no build artifacts)"
+      - name: Build with Next.js
+        run: npm run build:github
 
-      - name: Wait for EC2 instance to be ready
-        run: |
-          echo "⏳ Waiting for EC2 instance to be ready..."
+      - name: Upload artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: ./out
 
-          # If it's a new instance, wait for it to be running
-          if [ "${{ steps.check-infra.outputs.existing_instance }}" == "false" ]; then
-            echo "🔍 Waiting for new instance to boot..."
-            sleep 60  # Give new instance time to boot
-          fi
-
-          echo "✅ Proceeding with deployment"
-
-      - name: Setup and deploy application on EC2
-        run: |
-          echo "🔑 Preparing SSH connection..."
-
-          # Create SSH key file with proper permissions
-          echo "${{ env.PRIVATE_KEY }}" > /tmp/ssh_key
-          chmod 600 /tmp/ssh_key
-
-          # Test SSH connectivity
-          echo "🔍 Testing SSH connectivity..."
-          HOST="${{ steps.get-ip.outputs.ec2_ip }}"
-
-          # For existing instances, we might need to try the old key first if our new key wasn't added
-          if [ "${{ steps.check-infra.outputs.existing_instance }}" == "true" ]; then
-            echo "🔍 Testing SSH with new key for existing instance..."
-            # Try with new key first, then fall back if needed
-          fi
-
-          # Wait for SSH to be ready (up to 3 minutes since we've already waited for boot)
-          echo "⏳ Waiting for SSH to be ready..."
-          for i in {1..18}; do
-            if timeout 10 ssh -i /tmp/ssh_key -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
-                -o ConnectTimeout=10 ec2-user@$HOST "echo 'SSH connection successful'" 2>/dev/null; then
-              echo "✅ SSH connection established after $((i*10)) seconds"
-              break
-            else
-              echo "⏳ Attempt $i/18: SSH not ready, waiting 10 seconds..."
-              sleep 10
-            fi
-            
-            if [ $i -eq 18 ]; then
-              echo "❌ SSH connection failed after 3 minutes"
-              echo "🔍 Debugging information:"
-              
-              # Get instance details
-              if [ "${{ steps.check-infra.outputs.existing_instance }}" == "true" ]; then
-                INSTANCE_ID="${{ steps.check-infra.outputs.instance_id }}"
-              else
-                INSTANCE_ID=$(aws ec2 describe-instances \
-                  --filters "Name=tag:Name,Values=pronunciation-analysis-web-server" "Name=instance-state-name,Values=running" \
-                  --query "Reservations[0].Instances[0].InstanceId" --output text)
-              fi
-              
-              echo "Instance ID: $INSTANCE_ID"
-              aws ec2 describe-instances --instance-ids $INSTANCE_ID \
-                --query "Reservations[0].Instances[0].{State:State.Name,PublicIP:PublicIpAddress,KeyName:KeyName,SecurityGroups:SecurityGroups}" \
-                --output table
-              
-              echo ""
-              echo "🔍 Checking if we can add SSH key via instance restart..."
-              echo "⚠️ This might require terminating and recreating the instance with the correct key"
-              
-              rm -f /tmp/ssh_key
-              exit 1
-            fi
-          done
-
-          echo "🧹 Cleaning up existing application..."
-          ssh -i /tmp/ssh_key -o StrictHostKeyChecking=no ec2-user@$HOST << 'EOF'
-            # Stop the running application
-            pm2 delete pronunciation-analysis-demo || true
-
-            # Clean up old application files
-            if [ -d "/home/ec2-user/app" ]; then
-              echo "📂 Removing old application files..."
-              rm -rf /home/ec2-user/app/*
-              rm -rf /home/ec2-user/app/.* 2>/dev/null || true
-            else
-              mkdir -p /home/ec2-user/app
-            fi
-
-            # Clean up npm cache to free space
-            echo "🧹 Cleaning npm cache..."
-            npm cache clean --force 2>/dev/null || true
-
-            echo "✅ Cleanup completed, application directory is clean"
-
-            # Show disk usage after cleanup
-            echo "💾 Disk usage after cleanup:"
-            df -h /
-          EOF
-
-          echo "🚀 Setting up environment..."
-          ssh -i /tmp/ssh_key -o StrictHostKeyChecking=no ec2-user@$HOST << 'EOF'
-            # Install Node.js if not present
-            if ! command -v node &> /dev/null; then
-              echo "📦 Installing Node.js 18..."
-              curl -fsSL https://rpm.nodesource.com/setup_18.x | sudo bash -
-              sudo dnf install -y nodejs
-              echo "✅ Node.js installed: $(node --version)"
-            else
-              echo "✅ Node.js already installed: $(node --version)"
-            fi
-
-            # Install PM2 if not present
-            if ! command -v pm2 &> /dev/null; then
-              echo "📦 Installing PM2..."
-              sudo npm install -g pm2
-              echo "✅ PM2 installed: $(pm2 --version)"
-            else
-              echo "✅ PM2 already installed: $(pm2 --version)"
-            fi
-          EOF
-
-                    echo "📤 Transferring source code..."
-          # Create tar archive and transfer via ssh (since rsync is not available)
-          cd deployment
-          tar -czf ../source.tar.gz .
-          cd ..
-
-          # Transfer and extract on the server
-          echo "📦 Uploading source code archive..."
-          scp -i /tmp/ssh_key -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
-            source.tar.gz ec2-user@$HOST:/home/ec2-user/
-
-          echo "📂 Extracting source code on server..."
-          ssh -i /tmp/ssh_key -o StrictHostKeyChecking=no ec2-user@$HOST \
-            "cd /home/ec2-user/app && tar -xzf ../source.tar.gz && rm ../source.tar.gz"
-
-          # Clean up local archive
-          rm -f source.tar.gz
-
-          echo "✅ Source code transferred and extracted successfully"
-
-          echo "🔨 Building and starting application..."
-          ssh -i /tmp/ssh_key -o StrictHostKeyChecking=no ec2-user@$HOST << 'EOF'
-            cd /home/ec2-user/app
-
-            echo "🚀 Building application..."
-
-            # Install dependencies and build application
-            if [ -f "package.json" ]; then
-              echo "📦 Installing dependencies..."
-              npm ci
-              echo "✅ Dependencies installed"
-              
-              # Show disk usage after dependencies
-              echo "💾 Disk usage after dependencies:"
-              df -h /
-              
-              echo "🔨 Building application..."
-              npm run build
-              echo "✅ Application built successfully"
-              
-              # Show disk usage after build
-              echo "💾 Disk usage after build:"
-              df -h /
-              
-              # Clean up dev dependencies to save space
-              echo "🧹 Cleaning up dev dependencies..."
-              npm prune --production
-              echo "✅ Dev dependencies removed"
-              
-              # Final disk usage
-              echo "💾 Final disk usage:"
-              df -h /
-            fi
-
-            # Start the application with PM2
-            echo "🔄 Starting application with PM2..."
-            pm2 start npm --name "pronunciation-analysis-demo" -- start
-            pm2 save
-            pm2 startup
-
-            echo "✅ Application started successfully!"
-            echo ""
-            echo "📊 Application Status:"
-            pm2 list
-            echo ""
-            echo "🔗 Application should be available at the URLs shown below"
-          EOF
-
-          # Clean up SSH key
-          rm -f /tmp/ssh_key
-
-          echo "🎉 Deployment completed successfully!"
+  deploy:
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    runs-on: ubuntu-latest
+    needs: build
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
 
       - name: Display Deployment Information
         run: |
-          if [ "${{ steps.check-infra.outputs.existing_instance }}" == "true" ]; then
-            echo "🔄 Application update completed successfully!"
-            echo "♻️ Reused existing EC2 instance: ${{ steps.check-infra.outputs.instance_id }}"
-          else
-            echo "🎉 New deployment completed successfully!"
-            echo "🆕 Created new infrastructure"
-          fi
+          echo "🎉 Deployment completed successfully!"
           echo ""
           echo "📍 DEPLOYMENT INFORMATION:"
           echo "========================="
-          echo "🌐 Static IP Address: ${{ steps.get-ip.outputs.ec2_ip }}"
-          echo "🔗 Application URL (Direct): http://${{ steps.get-ip.outputs.ec2_ip }}:3000"
-          echo "🔗 Application URL (Nginx): http://${{ steps.get-ip.outputs.ec2_ip }}"
-          echo "🚀 API Endpoint: http://${{ steps.get-ip.outputs.ec2_ip }}:3000/api/pronunciation-assessment"
+          echo "🔗 Application URL: ${{ steps.deployment.outputs.page_url }}"
+          echo "🚀 GitHub Pages deployment complete"
           echo ""
           echo "📝 Additional Information:"
-          echo "- SSH Access: ssh -i your-key.pem ec2-user@${{ steps.get-ip.outputs.ec2_ip }}"
-          echo "- PM2 Status: ssh -i your-key.pem ec2-user@${{ steps.get-ip.outputs.ec2_ip }} 'pm2 list'"
-          echo "- Application Logs: ssh -i your-key.pem ec2-user@${{ steps.get-ip.outputs.ec2_ip }} 'pm2 logs pronunciation-analysis-demo'"
+          echo "- The application is now live on GitHub Pages"
+          echo "- Static files are served from the 'out' directory"
+          echo "- Updates will be automatically deployed on main branch changes"
