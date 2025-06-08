@@ -144,7 +144,7 @@ jobs:
           cp tailwind.config.js deployment/
           cp postcss.config.js deployment/
           cp .eslintrc.json deployment/
-                    # Copy environment example for reference
+          # Copy environment example for reference
           cp env.example deployment/
           echo "📦 Source code package created (no build artifacts)"
 
@@ -160,16 +160,55 @@ jobs:
 
           echo "✅ Proceeding with deployment"
 
-      - name: Deploy source code and build on EC2
-        uses: appleboy/ssh-action@v1.0.0
-        with:
-          host: ${{ steps.get-ip.outputs.ec2_ip }}
-          username: ec2-user
-          key: ${{ env.PRIVATE_KEY }}
-          port: 22
-          script: |
-            echo "🧹 Cleaning up existing application..."
+      - name: Setup and deploy application on EC2
+        run: |
+          echo "🔑 Preparing SSH connection..."
 
+          # Create SSH key file with proper permissions
+          echo "${{ env.PRIVATE_KEY }}" > /tmp/ssh_key
+          chmod 600 /tmp/ssh_key
+
+          # Test SSH connectivity
+          echo "🔍 Testing SSH connectivity..."
+          HOST="${{ steps.get-ip.outputs.ec2_ip }}"
+
+          # Wait for SSH to be ready (up to 5 minutes)
+          echo "⏳ Waiting for SSH to be ready..."
+          for i in {1..30}; do
+            if timeout 10 ssh -i /tmp/ssh_key -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+                -o ConnectTimeout=10 ec2-user@$HOST "echo 'SSH connection successful'" 2>/dev/null; then
+              echo "✅ SSH connection established after $((i*10)) seconds"
+              break
+            else
+              echo "⏳ Attempt $i/30: SSH not ready, waiting 10 seconds..."
+              sleep 10
+            fi
+            
+            if [ $i -eq 30 ]; then
+              echo "❌ SSH connection failed after 5 minutes"
+              echo "🔍 Debugging information:"
+              
+              # Get instance details
+              if [ "${{ steps.check-infra.outputs.existing_instance }}" == "true" ]; then
+                INSTANCE_ID="${{ steps.check-infra.outputs.instance_id }}"
+              else
+                INSTANCE_ID=$(aws ec2 describe-instances \
+                  --filters "Name=tag:Name,Values=pronunciation-analysis-web-server" "Name=instance-state-name,Values=running" \
+                  --query "Reservations[0].Instances[0].InstanceId" --output text)
+              fi
+              
+              echo "Instance ID: $INSTANCE_ID"
+              aws ec2 describe-instances --instance-ids $INSTANCE_ID \
+                --query "Reservations[0].Instances[0].{State:State.Name,PublicIP:PublicIpAddress,KeyName:KeyName,SecurityGroups:SecurityGroups}" \
+                --output table
+              
+              rm -f /tmp/ssh_key
+              exit 1
+            fi
+          done
+
+          echo "🧹 Cleaning up existing application..."
+          ssh -i /tmp/ssh_key -o StrictHostKeyChecking=no ec2-user@$HOST << 'EOF'
             # Stop the running application
             pm2 delete pronunciation-analysis-demo || true
 
@@ -191,11 +230,10 @@ jobs:
             # Show disk usage after cleanup
             echo "💾 Disk usage after cleanup:"
             df -h /
-            echo ""
-            echo "🚀 Setting up application environment..."
+          EOF
 
-            cd /home/ec2-user/app
-
+          echo "🚀 Setting up environment..."
+          ssh -i /tmp/ssh_key -o StrictHostKeyChecking=no ec2-user@$HOST << 'EOF'
             # Install Node.js if not present
             if ! command -v node &> /dev/null; then
               echo "📦 Installing Node.js 18..."
@@ -214,37 +252,22 @@ jobs:
             else
               echo "✅ PM2 already installed: $(pm2 --version)"
             fi
+          EOF
 
-      - name: Transfer source files via rsync
-        run: |
-          echo "📤 Transferring source code to EC2..."
-
-          # Create SSH key file
-          echo "${{ env.PRIVATE_KEY }}" > /tmp/ssh_key
-          chmod 600 /tmp/ssh_key
-
-          # Transfer files using rsync (much more efficient than scp)
+          echo "📤 Transferring source code..."
+          # Transfer files using rsync
           rsync -avz --delete \
             -e "ssh -i /tmp/ssh_key -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null" \
             deployment/ \
-            ec2-user@${{ steps.get-ip.outputs.ec2_ip }}:/home/ec2-user/app/
+            ec2-user@$HOST:/home/ec2-user/app/
 
           echo "✅ Source code transferred successfully"
 
-          # Clean up SSH key
-          rm -f /tmp/ssh_key
-
-      - name: Build and start application on EC2
-        uses: appleboy/ssh-action@v1.0.0
-        with:
-          host: ${{ steps.get-ip.outputs.ec2_ip }}
-          username: ec2-user
-          key: ${{ env.PRIVATE_KEY }}
-          port: 22
-          script: |
+          echo "🔨 Building and starting application..."
+          ssh -i /tmp/ssh_key -o StrictHostKeyChecking=no ec2-user@$HOST << 'EOF'
             cd /home/ec2-user/app
 
-            echo "🚀 Building and starting application..."
+            echo "🚀 Building application..."
 
             # Install dependencies and build application
             if [ -f "package.json" ]; then
@@ -286,6 +309,12 @@ jobs:
             pm2 list
             echo ""
             echo "🔗 Application should be available at the URLs shown below"
+          EOF
+
+          # Clean up SSH key
+          rm -f /tmp/ssh_key
+
+          echo "🎉 Deployment completed successfully!"
 
       - name: Display Deployment Information
         run: |
