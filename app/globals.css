@@ -1,0 +1,27 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  html {
+    font-family: 'Inter', system-ui, sans-serif;
+  }
+  
+  body {
+    @apply bg-gradient-to-br from-blue-50 to-indigo-100 min-h-screen;
+  }
+}
+
+@layer components {
+  .recording-pulse {
+    animation: pulse 1.5s ease-in-out infinite;
+  }
+  
+  .waveform-bar {
+    @apply bg-primary-500 rounded-full transition-all duration-75;
+  }
+  
+  .feedback-card {
+    @apply bg-white rounded-xl shadow-lg border border-gray-200 p-6 transition-all duration-300 hover:shadow-xl;
+  }
+} 
