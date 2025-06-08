@@ -7,6 +7,22 @@ interface PronunciationAssessmentRequest {
   language?: string
 }
 
+interface WordResult {
+  Word: string
+  PronunciationAssessment?: {
+    AccuracyScore: number
+    ErrorType: string
+  }
+  Phonemes?: PhonemeResult[]
+}
+
+interface PhonemeResult {
+  Phoneme: string
+  PronunciationAssessment?: {
+    AccuracyScore: number
+  }
+}
+
 export async function POST(request: NextRequest) {
   try {
     const { audioData, referenceText, language = 'en-US' }: PronunciationAssessmentRequest = await request.json()
@@ -102,11 +118,11 @@ export async function POST(request: NextRequest) {
           pronunciationScore: pronunciationResult.pronunciationScore,
           prosodyScore: pronunciationResult.prosodyScore || 0
         },
-        words: parsedResult.NBest?.[0]?.Words?.map((word: any) => ({
+        words: parsedResult.NBest?.[0]?.Words?.map((word: WordResult) => ({
           word: word.Word,
           accuracyScore: word.PronunciationAssessment?.AccuracyScore,
           errorType: word.PronunciationAssessment?.ErrorType,
-          phonemes: word.Phonemes?.map((phoneme: any) => ({
+          phonemes: word.Phonemes?.map((phoneme: PhonemeResult) => ({
             phoneme: phoneme.Phoneme,
             accuracyScore: phoneme.PronunciationAssessment?.AccuracyScore
           }))

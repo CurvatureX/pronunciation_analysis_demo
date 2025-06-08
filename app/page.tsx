@@ -9,7 +9,6 @@ import {
   RotateCcw,
   Volume2,
   CheckCircle,
-  AlertCircle,
   Star,
   Brain,
   Sparkles,
@@ -31,13 +30,28 @@ interface WordFeedback {
   position: number;
 }
 
+interface AzureWord {
+  Word: string;
+  PronunciationAssessment?: {
+    AccuracyScore: number;
+    ErrorType: string;
+  };
+}
+
+interface AzureApiResponse {
+  NBest?: Array<{
+    Words?: AzureWord[];
+  }>;
+  [key: string]: unknown;
+}
+
 interface AnalysisResult {
   detectedText: string;
   userTranscript: string;
   scores: PronunciationScore;
   wordFeedback: WordFeedback[];
   audioUrl?: string;
-  rawApiResponse?: any;
+  rawApiResponse?: AzureApiResponse;
   aiAnalysis?: string;
   error?: string;
 }
@@ -52,7 +66,8 @@ export default function PronunciationAnalysis() {
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [isAiAnalyzing, setIsAiAnalyzing] = useState(false);
   // Remove target sentence - Azure will detect what was spoken automatically
-  const [audioLevel, setAudioLevel] = useState(0);
+  const [audioLevel, setAudioLevel] = useState(0); // For future audio visualization
+  void audioLevel; // Suppress unused variable warning
   const [recordingTime, setRecordingTime] = useState(0);
 
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
@@ -364,14 +379,14 @@ export default function PronunciationAnalysis() {
           },
           wordFeedback:
             detailedResult.NBest?.[0]?.Words?.map(
-              (word: any, index: number) => ({
+              (word: AzureWord, index: number) => ({
                 word: word.Word,
                 score: Math.round(
                   word.PronunciationAssessment?.AccuracyScore || 0
                 ),
                 feedback: generateFeedback(
-                  word.PronunciationAssessment?.AccuracyScore,
-                  word.PronunciationAssessment?.ErrorType
+                  word.PronunciationAssessment?.AccuracyScore || 0,
+                  word.PronunciationAssessment?.ErrorType || "Unknown"
                 ),
                 position: index,
               })
@@ -648,7 +663,7 @@ export default function PronunciationAnalysis() {
                 </h3>
                 <div className="bg-blue-50 p-4 rounded-lg border-l-4 border-blue-500">
                   <p className="text-lg text-gray-800 italic">
-                    "{analysisResult.detectedText}"
+                    &ldquo;{analysisResult.detectedText}&rdquo;
                   </p>
                   <p className="text-sm text-gray-600 mt-2">
                     This is what Azure Speech Service automatically detected
@@ -698,7 +713,7 @@ export default function PronunciationAnalysis() {
                     >
                       <div className="flex items-center mb-2 sm:mb-0">
                         <span className="font-medium text-lg mr-3">
-                          "{word.word}"
+                          &ldquo;{word.word}&rdquo;
                         </span>
                         <span
                           className={`text-sm font-bold ${getScoreColor(
