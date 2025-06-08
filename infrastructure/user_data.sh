@@ -1,17 +1,17 @@
 #!/bin/bash
 
 # Update system
-yum update -y
+dnf update -y
 
-# Install Node.js 16 (compatible with Amazon Linux 2)
-curl -fsSL https://rpm.nodesource.com/setup_16.x | bash -
-yum install -y nodejs
+# Install Node.js 18 (compatible with Amazon Linux 2023)
+curl -fsSL https://rpm.nodesource.com/setup_18.x | bash -
+dnf install -y nodejs
 
 # Install PM2 globally
 npm install -g pm2
 
 # Install nginx for reverse proxy (optional)
-yum install -y nginx
+dnf install -y nginx
 
 # Create application directory
 mkdir -p /home/ec2-user/app

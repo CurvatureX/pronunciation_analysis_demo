@@ -45,7 +45,7 @@ The deployment happens automatically when:
 The Terraform configuration creates:
 
 - **Uses Default VPC**: Uses your existing default VPC and subnet
-- **EC2 Instance**: Amazon Linux 2 instance with Node.js and PM2
+- **EC2 Instance**: Amazon Linux 2023 instance with Node.js 18 and PM2
 - **Security Groups**: Configured for HTTP, HTTPS, SSH, and Next.js (port 3000)
 - **Elastic IP**: Static IP address for the instance
 - **Key Pair**: SSH key for secure access
