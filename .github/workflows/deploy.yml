@@ -58,6 +58,34 @@ jobs:
         run: terraform init
         working-directory: ./infrastructure
 
+      - name: Clean up existing resources
+        run: |
+          # List and delete any existing key pairs with the project name
+          aws ec2 describe-key-pairs --query "KeyPairs[?starts_with(KeyName, 'pronunciation-analysis-deployer-key')].KeyName" --output text | \
+          xargs -r -I {} aws ec2 delete-key-pair --key-name {}
+
+          # List and terminate any existing instances with the project name
+          aws ec2 describe-instances \
+            --filters "Name=tag:Name,Values=pronunciation-analysis-web-server-*" "Name=instance-state-name,Values=running,pending,stopping,stopped" \
+            --query "Reservations[].Instances[].InstanceId" --output text | \
+          xargs -r -I {} aws ec2 terminate-instances --instance-ids {}
+
+          # Wait a bit for instances to start terminating
+          sleep 10
+
+          # Release any existing Elastic IPs with the project name
+          aws ec2 describe-addresses \
+            --filters "Name=tag:Name,Values=pronunciation-analysis-eip-*" \
+            --query "Addresses[?AssociationId==null].AllocationId" --output text | \
+          xargs -r -I {} aws ec2 release-address --allocation-id {}
+
+          # Delete any existing security groups with the project name
+          aws ec2 describe-security-groups \
+            --filters "Name=group-name,Values=pronunciation-analysis-web-sg-*" \
+            --query "SecurityGroups[].GroupId" --output text | \
+          xargs -r -I {} aws ec2 delete-security-group --group-id {}
+        continue-on-error: true
+
       - name: Terraform Plan
         run: terraform plan -out=tfplan -var="public_key=${{ env.PUBLIC_KEY }}"
         working-directory: ./infrastructure

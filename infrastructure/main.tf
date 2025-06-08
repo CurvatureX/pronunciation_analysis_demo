@@ -5,6 +5,10 @@ terraform {
       source  = "hashicorp/aws"
       version = "~> 5.0"
     }
+    random = {
+      source  = "hashicorp/random"
+      version = "~> 3.1"
+    }
   }
 }
 
@@ -56,7 +60,7 @@ data "aws_availability_zones" "available" {
 
 # Create security group
 resource "aws_security_group" "web" {
-  name_prefix = "${var.project_name}-web-"
+  name        = "${var.project_name}-web-sg-${random_id.deployment.hex}"
   vpc_id      = data.aws_vpc.default.id
 
   # HTTP
@@ -105,10 +109,15 @@ resource "aws_security_group" "web" {
   }
 }
 
-# Create key pair
+# Create key pair with unique name
 resource "aws_key_pair" "deployer" {
-  key_name   = "${var.project_name}-deployer-key"
+  key_name   = "${var.project_name}-deployer-key-${random_id.deployment.hex}"
   public_key = var.public_key
+}
+
+# Generate random ID for unique resource names
+resource "random_id" "deployment" {
+  byte_length = 4
 }
 
 # Create EC2 instance
@@ -124,7 +133,7 @@ resource "aws_instance" "web" {
   }))
 
   tags = {
-    Name        = "${var.project_name}-web-server"
+    Name        = "${var.project_name}-web-server-${random_id.deployment.hex}"
     Environment = var.environment
   }
 }
@@ -135,7 +144,7 @@ resource "aws_eip" "web" {
   domain   = "vpc"
 
   tags = {
-    Name        = "${var.project_name}-eip"
+    Name        = "${var.project_name}-eip-${random_id.deployment.hex}"
     Environment = var.environment
   }
 
