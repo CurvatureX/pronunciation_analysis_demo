@@ -15,36 +15,14 @@ You need to configure the following secrets in your GitHub repository settings:
 
 #### Required Secrets:
 
-- `AWS_ACCESS_KEY_ID`: Your AWS access key
-- `AWS_SECRET_ACCESS_KEY`: Your AWS secret key
-- `EC2_SSH_PRIVATE_KEY`: Private SSH key for EC2 access
+- `AWS_ACCESS_KEY`: Your AWS access key
+- `AWS_SECRET_KEY`: Your AWS secret key
 
-#### Setting up SSH Keys:
-
-```bash
-# Generate SSH key pair
-ssh-keygen -t rsa -b 4096 -f ~/.ssh/pronunciation-analysis-key
-
-# Copy the public key content for terraform.tfvars
-cat ~/.ssh/pronunciation-analysis-key.pub
-
-# Copy the private key content for GitHub secret
-cat ~/.ssh/pronunciation-analysis-key
-```
+**Note**: SSH keys are automatically generated during deployment, so no manual SSH key setup is required.
 
 ### 3. Terraform Configuration
 
-1. Copy the example tfvars file:
-
-   ```bash
-   cd infrastructure
-   cp terraform.tfvars.example terraform.tfvars
-   ```
-
-2. Edit `terraform.tfvars` and update the values:
-   - Add your SSH public key
-   - Adjust AWS region if needed
-   - Modify instance type if required
+No manual Terraform configuration is needed - the CI/CD pipeline handles everything automatically with sensible defaults.
 
 ## Deployment Process
 
@@ -134,8 +112,8 @@ Add your production environment variables based on `env.example`.
 
 1. **Deployment fails at SSH step**
 
-   - Check if EC2_SSH_PRIVATE_KEY secret is correctly set
-   - Verify the public key in terraform.tfvars matches the private key
+   - SSH keys are auto-generated during deployment
+   - Check if EC2 instance is properly created and accessible
 
 2. **Application not accessible**
 

@@ -46,12 +46,20 @@ jobs:
           aws-secret-access-key: ${{ secrets.AWS_SECRET_KEY }}
           aws-region: us-west-1
 
+      - name: Generate SSH key pair
+        run: |
+          ssh-keygen -t rsa -b 4096 -f ~/.ssh/pronunciation-analysis-key -N ""
+          echo "PUBLIC_KEY=$(cat ~/.ssh/pronunciation-analysis-key.pub)" >> $GITHUB_ENV
+          echo "PRIVATE_KEY<<EOF" >> $GITHUB_ENV
+          cat ~/.ssh/pronunciation-analysis-key >> $GITHUB_ENV
+          echo "EOF" >> $GITHUB_ENV
+
       - name: Terraform Init
         run: terraform init
         working-directory: ./infrastructure
 
       - name: Terraform Plan
-        run: terraform plan -out=tfplan
+        run: terraform plan -out=tfplan -var="public_key=${{ env.PUBLIC_KEY }}"
         working-directory: ./infrastructure
 
       - name: Terraform Apply
@@ -94,7 +102,7 @@ jobs:
         with:
           host: ${{ steps.get-ip.outputs.ec2_ip }}
           username: ec2-user
-          key: ${{ secrets.EC2_SSH_PRIVATE_KEY }}
+          key: ${{ env.PRIVATE_KEY }}
           port: 22
           source: "deployment/*"
           target: "/home/ec2-user/app"
@@ -105,7 +113,7 @@ jobs:
         with:
           host: ${{ steps.get-ip.outputs.ec2_ip }}
           username: ec2-user
-          key: ${{ secrets.EC2_SSH_PRIVATE_KEY }}
+          key: ${{ env.PRIVATE_KEY }}
           port: 22
           script: |
             cd /home/ec2-user/app
