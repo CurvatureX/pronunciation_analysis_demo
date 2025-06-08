@@ -9,13 +9,13 @@ output "ec2_public_dns" {
 }
 
 output "vpc_id" {
-  description = "ID of the VPC"
-  value       = aws_vpc.main.id
+  description = "ID of the default VPC"
+  value       = data.aws_vpc.default.id
 }
 
 output "subnet_id" {
-  description = "ID of the public subnet"
-  value       = aws_subnet.public.id
+  description = "ID of the default subnet"
+  value       = data.aws_subnet.default.id
 }
 
 output "security_group_id" {
