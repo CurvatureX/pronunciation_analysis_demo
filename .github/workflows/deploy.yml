@@ -24,9 +24,6 @@ jobs:
       - name: Run linter
         run: npm run lint
 
-      - name: Build application
-        run: npm run build
-
   deploy:
     needs: test
     runs-on: ubuntu-latest
@@ -48,11 +45,18 @@ jobs:
 
       - name: Generate SSH key pair
         run: |
+          echo "🔑 Generating SSH key pair..."
           ssh-keygen -t rsa -b 4096 -f ~/.ssh/pronunciation-analysis-key -N ""
+
+          echo "📝 SSH key pair generated successfully"
+          echo "Public key fingerprint: $(ssh-keygen -lf ~/.ssh/pronunciation-analysis-key.pub)"
+
           echo "PUBLIC_KEY=$(cat ~/.ssh/pronunciation-analysis-key.pub)" >> $GITHUB_ENV
           echo "PRIVATE_KEY<<EOF" >> $GITHUB_ENV
           cat ~/.ssh/pronunciation-analysis-key >> $GITHUB_ENV
           echo "EOF" >> $GITHUB_ENV
+
+          echo "✅ SSH environment variables set"
 
       - name: Terraform Init
         run: terraform init
@@ -128,17 +132,33 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      - name: Build application
-        run: npm run build
-
-      - name: Create deployment package
+      - name: Create source code package
         run: |
           mkdir -p deployment
-          cp -r .next deployment/
-          cp -r public deployment/
+          # Copy source files only (no build artifacts)
+          cp -r app/ deployment/
+          cp -r public/ deployment/
           cp package*.json deployment/
           cp next.config.js deployment/
-          # Don't include node_modules - we'll install them on the server
+          cp tsconfig.json deployment/
+          cp tailwind.config.js deployment/
+          cp postcss.config.js deployment/
+          cp .eslintrc.json deployment/
+                    # Copy environment example for reference
+          cp env.example deployment/
+          echo "📦 Source code package created (no build artifacts)"
+
+      - name: Wait for EC2 instance to be ready
+        run: |
+          echo "⏳ Waiting for EC2 instance to be ready..."
+
+          # If it's a new instance, wait for it to be running
+          if [ "${{ steps.check-infra.outputs.existing_instance }}" == "false" ]; then
+            echo "🔍 Waiting for new instance to boot..."
+            sleep 60  # Give new instance time to boot
+          fi
+
+          echo "✅ Proceeding with deployment"
 
       - name: Deploy to EC2
         uses: appleboy/scp-action@v0.1.4
@@ -150,8 +170,10 @@ jobs:
           source: "deployment/*"
           target: "/home/ec2-user/app"
           strip_components: 1
+          timeout: 300s
+          command_timeout: 300s
 
-      - name: Clean up and start application on EC2
+      - name: Clean up and build application on EC2
         uses: appleboy/ssh-action@v1.0.0
         with:
           host: ${{ steps.get-ip.outputs.ec2_ip }}
@@ -209,7 +231,7 @@ jobs:
             echo ""
             echo "⏳ Waiting for new application files to be deployed..."
 
-      - name: Start application
+      - name: Build and start application
         uses: appleboy/ssh-action@v1.0.0
         with:
           host: ${{ steps.get-ip.outputs.ec2_ip }}
@@ -219,16 +241,33 @@ jobs:
           script: |
             cd /home/ec2-user/app
 
-            echo "🚀 Starting application..."
+            echo "🚀 Building and starting application..."
 
-            # Install dependencies if package.json exists
+            # Install dependencies and build application
             if [ -f "package.json" ]; then
               echo "📦 Installing dependencies..."
-              npm ci --production --no-optional
+              npm ci
               echo "✅ Dependencies installed"
               
-              # Show disk usage after installation
-              echo "💾 Disk usage after dependency installation:"
+              # Show disk usage after dependencies
+              echo "💾 Disk usage after dependencies:"
+              df -h /
+              
+              echo "🔨 Building application..."
+              npm run build
+              echo "✅ Application built successfully"
+              
+              # Show disk usage after build
+              echo "💾 Disk usage after build:"
+              df -h /
+              
+              # Clean up dev dependencies to save space
+              echo "🧹 Cleaning up dev dependencies..."
+              npm prune --production
+              echo "✅ Dev dependencies removed"
+              
+              # Final disk usage
+              echo "💾 Final disk usage:"
               df -h /
             fi
 
