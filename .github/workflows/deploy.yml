@@ -160,20 +160,7 @@ jobs:
 
           echo "✅ Proceeding with deployment"
 
-      - name: Deploy to EC2
-        uses: appleboy/scp-action@v0.1.4
-        with:
-          host: ${{ steps.get-ip.outputs.ec2_ip }}
-          username: ec2-user
-          key: ${{ env.PRIVATE_KEY }}
-          port: 22
-          source: "deployment/*"
-          target: "/home/ec2-user/app"
-          strip_components: 1
-          timeout: 300s
-          command_timeout: 300s
-
-      - name: Clean up and build application on EC2
+      - name: Deploy source code and build on EC2
         uses: appleboy/ssh-action@v1.0.0
         with:
           host: ${{ steps.get-ip.outputs.ec2_ip }}
@@ -190,7 +177,7 @@ jobs:
             if [ -d "/home/ec2-user/app" ]; then
               echo "📂 Removing old application files..."
               rm -rf /home/ec2-user/app/*
-              rm -rf /home/ec2-user/app/.*
+              rm -rf /home/ec2-user/app/.* 2>/dev/null || true
             else
               mkdir -p /home/ec2-user/app
             fi
@@ -228,10 +215,26 @@ jobs:
               echo "✅ PM2 already installed: $(pm2 --version)"
             fi
 
-            echo ""
-            echo "⏳ Waiting for new application files to be deployed..."
+      - name: Transfer source files via rsync
+        run: |
+          echo "📤 Transferring source code to EC2..."
 
-      - name: Build and start application
+          # Create SSH key file
+          echo "${{ env.PRIVATE_KEY }}" > /tmp/ssh_key
+          chmod 600 /tmp/ssh_key
+
+          # Transfer files using rsync (much more efficient than scp)
+          rsync -avz --delete \
+            -e "ssh -i /tmp/ssh_key -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null" \
+            deployment/ \
+            ec2-user@${{ steps.get-ip.outputs.ec2_ip }}:/home/ec2-user/app/
+
+          echo "✅ Source code transferred successfully"
+
+          # Clean up SSH key
+          rm -f /tmp/ssh_key
+
+      - name: Build and start application on EC2
         uses: appleboy/ssh-action@v1.0.0
         with:
           host: ${{ steps.get-ip.outputs.ec2_ip }}
